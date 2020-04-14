@@ -1,0 +1,279 @@
+---
+title: "P8106 Homework 3"
+author: "Ziyi Zhao"
+date: "4/13/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ISLR)
+library(caret)
+library(glmnet)
+library(MASS)
+library(e1071)
+library(pROC)
+library(AppliedPredictiveModeling)
+library(corrplot)
+
+```
+
+```{r importdata, include=FALSE}
+data(Weekly)
+
+dat <- Weekly %>% janitor::clean_names()
+
+str(dat)
+
+```
+
+# Part A: Produce graphical summaries of weekly data
+
+```{r plot,echo=FALSE}
+theme1 <- trellis.par.get()
+theme1$plot.symbol$col <- rgb(0.2,0.4,0.3,0.5)
+theme1$plot.symbol$pch <- 16
+theme1$plot.line$col <- rgb(0.8,0.1,0.1,0.1)
+theme1$plot.line$lwd <- 2
+theme1$strip.background$col <- rgb(0.0,0.2,0.6,0.2)
+trellis.par.set(theme1)
+
+featurePlot(x = dat[,(1:7)],
+            y = dat[,8],
+            plot = "scatter",
+            span = 0.5,
+            labels = c("Predictors","Today"),
+            type = c("p","smooth"),
+            layout = c(3,3))
+
+theme1 <- transparentTheme(trans = 0.4)
+theme1$strip.background$col <- rgb(0.0,0.6,0.2,0.2)
+trellis.par.set(theme1)
+
+featurePlot(x = dat[,1:7],
+            y = dat$direction,
+            scales = list(x=list(relation="free"),
+                          y=list(relation="free")),
+            plot = "density", pch = "|",
+            auto.key = list(columns = 2))
+
+x <- model.matrix(direction~year+lag1+lag2+lag3+lag4+lag5+volume, data = dat)[,-1]
+y <- dat$direction
+
+corrplot::corrplot(cor(x))
+
+```
+
+* the first plot show the scatter plots and density plots between variable 'today' and each predictors. In visual, we can hardly observe any linear or non-linear relationship.
+
+* the second plot use the dichotomous variable 'direction' as outcome. We can see the lag1 to lag5 are normally distributed for both classes. The purple line indicate that direction goes up; the blue line indicate the direction goes down.
+
+* the third plot is the correlation plot of those 7 features. We can easily observe the volume is positively correlated with year because the cell is shown in a dark blue. We don't observe any other strong correlation between other variables.
+
+# Part B: Use full dataset to perform logistic regression with outcome direction and predictor lag1 to lag5 and volume.
+
+```{r logistic, echo=FALSE}
+glm.fit <- glm(direction~lag1+lag2+lag3+lag4+lag5+volume,
+               data = dat,
+               family = binomial)
+
+contrasts(dat$direction)
+
+summary(glm.fit)
+
+```
+
+There is only one predictor appearing to be statistically significant. The p-value of predictor 'lag2' is smaller than 0.05, so we can conclude that the coefficient of lag2 is significantly different from 0. 
+
+# Part C: compute a confusion matrix and overall fraction of correct predictions. Briefly explain what confution matrix tell us.  
+
+```{r confusionmatrix, echo=FALSE}
+test_pred_prob <- predict(glm.fit,newdata = dat,
+                          type="response")
+
+test_pred <- rep("Down",length(test_pred_prob))
+test_pred[test_pred_prob>0.5] <- "Up"
+
+confusionMatrix(data = as.factor(test_pred),
+                reference = dat$direction,
+                positive = "Up")
+
+
+```
+
+From the results of confusion matrix, we can find out that there are 557 true "Up" and 54 true "Down". The prevalence tell us that there are about 56% of "up" in the observed data. The overall fraction of correct prediction is 0.5611 with 95% CI from 0.531 to 0.5908.
+
+The no information rate tell us that the fraction of "Up" class in both predicted and trained dataset is about 56%, which means the number of "up" and "down" approximate half and half. The p-value is larger than 0.05, which means that we failed to reject the null hypothesis that accuracy is equal to no information rate. 
+
+Kappa measure indicate how predicted values agreed with observed values. If the Kappa is close to 1, it means that the predicted values matched observed values perfectly. If not, vice versa. In this case, the Kappa is approaching to 0, which means that our predicted data agreed with the observed data by chance. This may not be a good predictive model.
+
+We have 0.9207 for sensitivity and 0.1116 for specificity. The specificity is very low. It indicated that only 11.2% of observed "Down" is predicted correctly. Also, we have 56.4% for PPV and 52.9% for NPV, which means that true "Up" and "Down" are above half of the predicted "up" and "down", respectively.
+
+# Part D: Plot ROC curves using the predicted probability from the logistic regression and report AUC.
+
+```{r ROCauc,echo=FALSE}
+roc_glm <- roc(dat$direction,test_pred_prob)
+plot(roc_glm,legacy.axes = TRUE, print.auc = TRUE)
+plot(smooth(roc_glm), col = 4, add = TRUE)
+
+```
+
+The AUC is 0.554.
+
+# Part E: Fit the logistic regression on the training data that selected from 1990 to 2008 with lag1 and lag2 as predictors; plot the ROC curve on the test data that selected from 2009 and 2010, and report the auc.
+
+```{r refitlogistic, echo=FALSE}
+dat_train <- dat %>% 
+  filter(year %in% c(1990:2008)) %>% 
+  dplyr::select(lag1,lag2,direction)
+
+dat_test <- dat %>% 
+  filter(year %in% c(2009,2010)) %>% 
+  dplyr::select(lag1,lag2,direction)
+
+glm_fit_trn <- glm(direction~.,data=dat_train,family = binomial)
+test_pred_prob1 <- predict(glm_fit_trn,newdata = dat_test,
+                           type = "response")
+
+roc_glm1 <- roc(dat_test$direction,test_pred_prob1)
+plot(roc_glm1, legacy.axes = TRUE, print.auc = TRUE)
+plot(smooth(roc_glm1),col = 4, add = TRUE)
+
+```
+
+The AUC is shown as 0.556.
+
+# Part F: repeat the part E with LDA and QDA separately.
+
+## LDA
+
+```{r lda,echo=FALSE}
+lda_fit <- lda(direction~., data = dat_train)
+
+plot(lda_fit)
+
+```
+
+In this case, we have one discriminant variable with 2 classes. The plot above show the distribution of Z conditional on "Up" and "Down" class respectively. In visual, both of them are approximately normal distributed; however, the mean and model looks exactly equal, which means that two classes are not separated well by two predictors.
+
+```{r ldaroc, echo=FALSE}
+lda_pred <- predict(lda_fit,newdata = dat_test)
+roc_lda <- roc(dat_test$direction,lda_pred$posterior[,2],
+               levels = c("Down","Up"))
+
+plot(roc_lda,legacy.axes = TRUE, print.auc = TRUE)
+plot(smooth(roc_lda),col = 4, add = TRUE)
+
+```
+
+The AUC is shown as 0.557.
+
+## QDA
+
+```{r qdafit, echo=FALSE}
+qda_fit <- qda(direction~.,dat_train)
+
+qda_pred <- predict(qda_fit, newdata = dat_test)
+
+roc_qda <- roc(dat_test$direction,qda_pred$posterior[,2],
+               levels = c("Down","Up"))
+
+plot(roc_qda,legacy.axes = TRUE,print.auc = TRUE)
+plot(smooth(roc_qda), col = 4, add = TRUE)
+
+```
+
+The AUC is shown as 0.529.
+
+# Part G: Repeat part E using KNN.
+
+## Fit KNN using caret
+
+```{r knn, echo=FALSE}
+ctrl1 <-  trainControl(method = "repeatedcv",
+                       repeats = 5,
+                       summaryFunction = twoClassSummary,
+                       classProbs = TRUE)
+
+set.seed(2)
+model_knn <- train(x = dat_train[,1:2],
+                   y = dat_train$direction,
+                   method = "knn",
+                   preProcess = c("center","scale"),
+                   tuneGrid = data.frame(k = seq(1,200,by = 5)),
+                   trControl = ctrl1)
+
+ggplot(model_knn)
+
+knn_pred <- predict(model_knn,newdata = dat_test,type = "prob")[,2]
+
+roc_knn <- roc(dat_test$direction,knn_pred)
+
+plot(roc_knn,legacy.axes = TRUE,print.auc = TRUE)
+plot(smooth(roc_knn),col = 4, add = TRUE)
+
+```
+
+The AUC of KNN model was shown as 0.535 using caret.
+
+## Fit logistic, LDA, and QDA using caret
+
+To compare each model, we use caret to fit other three models with repeated cross validation and compare the results.
+
+```{r compare, echo=FALSE}
+set.seed(2)
+model_glm <- train(x = dat_train[,c(1:2)],
+                   y = dat_train$direction,
+                   method = "glm",
+                   metric = "ROC",
+                   trControl = ctrl1)
+glm_pred <- predict(model_glm,newdata = dat_test, type = "prob")[,2]
+roc_glm2 <- roc(dat_test$direction,glm_pred)
+
+set.seed(2)
+model_lda <- train(x = dat_train[,c(1:2)],
+                   y = dat_train$direction,
+                   method = "lda",
+                   metric = "ROC",
+                   trControl = ctrl1)
+lda_pred1 <- predict(model_lda,newdata = dat_test,type = "prob")[,2]
+roc_lda1 <- roc(dat_test$direction,lda_pred1)
+
+set.seed(2)
+model_qda <- train(x=dat_train[,1:2],
+                   y=dat_train$direction,
+                   method = "qda",
+                   metric = "ROC",
+                   trControl = ctrl1)
+qda_pred1 <- predict(model_qda,newdata = dat_test,type = "prob")[,2]
+roc_qda1 <- roc(dat_test$direction,qda_pred1)
+
+resamp <- resamples(list(GLM = model_glm,LDA = model_lda,
+                         QDA = model_qda,KNN = model_knn))
+summary(resamp)
+
+auc <- c(roc_glm2$auc[1],roc_lda1$auc[1],roc_qda1$auc[1],
+         roc_knn$auc[1])
+modelNames <- c("GLM", "LDA", "QDA", "KNN")
+
+plot(roc_glm2,legacy.axes = TRUE)
+plot(roc_lda1, col = 2, add = TRUE)
+plot(roc_qda1, col = 3, add = TRUE)
+plot(roc_knn, col = 4, add = TRUE)
+legend("bottomright",legend = paste0(modelNames, ": ", round(auc,3)),
+       col = 1:4, lwd = 2)
+
+```
+
+We can find out GLM and LDA models have relatively higher mean specificity (over 0.9) than other two models; however, their mean sensitivity are less than 10%. 
+
+From the plot, the LDA have the best ROC curve and highest AUC values. However, the predictive performance on test data for those models still remain low because their AUC values are lower than 0.6. 
+
+
+
+
+
+
+
